@@ -23,7 +23,9 @@ Custom Home Assistant integration for **SJ Water Company** (sjwaterhub.com). Fet
 
 Click the badge to add:
 
-[![Open BLE Lights in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=twzkraus&repository=sjwater&category=integration)
+[![Open SJ Water Hub in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=twzkraus&repository=sjwater&category=integration)
+
+[Report an issue](https://github.com/twzkraus/sjwater/issues)
 
 Then restart Home Assistant
 
@@ -45,16 +47,16 @@ Then restart Home Assistant
 
 ### Multiple Accounts
 
-Each account configuration creates a unique ID based on a hash of the username, so you can add multiple water accounts if needed. The integration prevents duplicate configurations for the same account.
+Each account configuration uses a normalized username hash for duplicate detection and an opaque Home Assistant config-entry ID in entity IDs. The internal hash is pseudonymous.
 
 ## Sensors
 
 | Sensor | Entity ID Pattern | State Class | Description |
 |--------|-------------------|-------------|-------------|
-| Water Meter Total | `sensor.sjwater_<hash>_water_usage` | `TOTAL_INCREASING` | Cumulative water consumption (gallons). Never decreases — any drop is treated as a counter reset. |
-| Today's Water Usage | `sensor.sjwater_<hash>_todays_water_usage` | `TOTAL` | Water used today (gallons). Resets at midnight with `last_reset` set to start of day. |
+| Water Meter Total | `sensor.sjwater_<id>_water_usage` | `TOTAL_INCREASING` | Cumulative water consumption (gallons). Never decreases — any drop is treated as a counter reset. |
+| Today's Water Usage | `sensor.sjwater_<id>_todays_water_usage` | `TOTAL` | Water used today (gallons). Resets at midnight with `last_reset` set to start of day. |
 
-The `<hash>` is the first 8 characters of SHA-256 of the username — a stable, non-PII identifier.
+The `<id>` is based on the Home Assistant config-entry ID.
 
 ### Attributes
 
@@ -76,7 +78,9 @@ The integration authenticates against `sjwaterhub.com` using a two-step process:
 1. **GET** the login page to extract an anti-forgery token from a hidden `<input id="Token">` field
 2. **POST** credentials via the `VXengage_Login` action through the `RequestBroker` API
 
-After authentication, the session token is stored and refreshed on each API call. If the session expires, the integration automatically re-authenticates.
+After authentication, the session token is stored and refreshed on each API call. If the session expires, the integration attempts one reauthentication; if credentials are rejected, Home Assistant prompts for an updated password.
+
+This is an unofficial integration that uses the portal's web interface and browser-like request headers. It is not an official API; review the provider's terms and expect the portal to change or block automated access.
 
 ### Data Fetching
 
