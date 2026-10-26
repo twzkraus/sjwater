@@ -448,12 +448,11 @@ class TestImportStats:
 class TestEntityId:
     async def test_generates_correct_entity_id(self, coordinator):
         coordinator.client.username = "test@example.com"
+        coordinator.entry.entry_id = "01M5VCP6D3BRV8CV844DW0QX4E"
 
         result = coordinator.entity_id
 
-        assert result.startswith("sensor.sjwater_")
-        assert result.endswith("_water_usage")
-        assert len(result) > len("sensor.sjwater__water_usage")
+        assert result == "sensor.sjwater_01m5vcp6d3brv8cv844dw0qx4e_water_usage"
 
     async def test_consistent_across_calls(self, coordinator):
         coordinator.client.username = "test@example.com"

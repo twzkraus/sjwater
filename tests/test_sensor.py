@@ -38,6 +38,11 @@ class TestEntryIdSlug:
     def test_replaces_hyphens_for_entity_ids(self):
         assert entry_id_slug("abcd-1234") == "abcd_1234"
 
+    def test_lowercases_config_entry_ids(self):
+        assert entry_id_slug("01M5VCP6D3BRV8CV844DW0QX4E") == (
+            "01m5vcp6d3brv8cv844dw0qx4e"
+        )
+
 
 class TestSJWaterHubSensor:
     async def test_returns_current_sum(self, total_sensor, mock_coordinator):
