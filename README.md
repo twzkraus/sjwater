@@ -19,14 +19,19 @@ Custom Home Assistant integration for **SJ Water Company** (sjwaterhub.com). Fet
 
 ### HACS (Recommended)
 
+#### One click install
+
+Click the badge to add:
+
+[![Open BLE Lights in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=twzkraus&repository=sjwater&category=integration)
+
+Then restart Home Assistant
+
+#### Manual
+
 1. Add this repository as a custom repository in HACS (if not already listed)
 2. Search for **"SJ Water Hub"** in HACS and install
 3. Restart Home Assistant
-
-### Manual
-
-1. Copy the `sjwater/` folder into your `custom_components/` directory
-2. Restart Home Assistant
 
 ## Configuration
 
