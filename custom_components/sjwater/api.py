@@ -183,32 +183,15 @@ class SJWaterHubApiClient:
         if data.get("Token"):
             self._token = data.get("Token")
 
-        # Portal account identifier fields vary by account type.
+        # The portal uses opaque attribute keys; the account identifier is
+        # stored in one of their numeric values, as in the original integration.
         transaction = login_result.get("Transaction")
         tx_attributes = (
             transaction.get("Attributes") if isinstance(transaction, dict) else None
         )
         account_identifier = None
         if isinstance(tx_attributes, dict):
-            account_keys = {
-                "accountnumber",
-                "accountidentifier",
-                "accountid",
-                "accountguid",
-                "accountno",
-                "customeraccountnumber",
-                "customeridentifier",
-                "customernumber",
-                "customerid",
-                "customerno",
-            }
-            _LOGGER.debug("Login account attribute keys: %s", sorted(tx_attributes))
-            for key, value in tx_attributes.items():
-                if not isinstance(key, str):
-                    continue
-                normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
-                if normalized_key not in account_keys:
-                    continue
+            for value in tx_attributes.values():
                 if isinstance(value, int) and not isinstance(value, bool):
                     value = str(value)
                 if isinstance(value, str) and value.isdigit() and len(value) >= 6:
@@ -217,7 +200,7 @@ class SJWaterHubApiClient:
 
         if account_identifier is None:
             raise CannotConnect(
-                "The login response did not include a supported numeric account identifier"
+                "The login response did not include a numeric account identifier"
             )
 
         self._account_guid = account_identifier
