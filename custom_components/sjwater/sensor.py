@@ -11,13 +11,7 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN
-
-import hashlib
-
-def _account_id(username: str) -> str:
-    """Return a short stable non-PII identifier derived from the username."""
-    return hashlib.sha256(username.encode()).hexdigest()[:8]
+from .const import DOMAIN, entry_id_slug
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the sensor platform from a config entry."""
@@ -43,7 +37,7 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         
-        acct = _account_id(coordinator.client.username)
+        acct = entry_id_slug(coordinator.entry.entry_id)
         self.entity_id = f"sensor.sjwater_{acct}_water_usage"
         self._attr_unique_id = f"sjwater_{acct}_water_usage"
 
@@ -51,7 +45,7 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device information to link entities up."""
         return {
-            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "identifiers": {(DOMAIN, self.coordinator.entry.entry_id)},
             "name": "SJ Water Hub",
             "manufacturer": "SJ Water Company",
             "model": "Scraped Hub",
@@ -93,7 +87,7 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator):
         """Initialize the sensor."""
         super().__init__(coordinator)
-        acct = _account_id(coordinator.client.username)
+        acct = entry_id_slug(coordinator.entry.entry_id)
         self.entity_id = f"sensor.sjwater_{acct}_todays_water_usage"
         self._attr_unique_id = f"sjwater_{acct}_todays_water_usage"
         self._last_reset_midnight: datetime | None = None
@@ -102,7 +96,7 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device information to link entities up."""
         return {
-            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "identifiers": {(DOMAIN, self.coordinator.entry.entry_id)},
             "name": "SJ Water Hub",
             "manufacturer": "SJ Water Company",
             "model": "Scraped Hub",
