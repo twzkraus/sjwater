@@ -8,13 +8,14 @@ from typing import TYPE_CHECKING
 
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .api import SJWaterHubApiClient
-from .const import DOMAIN
+from .api import InvalidAuth, SJWaterHubApiClient
+from .const import DOMAIN, entry_id_slug
 
 if TYPE_CHECKING:
     from homeassistant.components.recorder.models import StatisticMeanType
@@ -80,11 +81,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         if stored:
             self._current_sum = stored.get("current_sum")
             self._last_processed_start = stored.get("last_processed_start")
-            _LOGGER.debug(
-                "Restored from store: current_sum=%s, last_processed_start=%s",
-                self._current_sum,
-                self._last_processed_start,
-            )
+            _LOGGER.debug("Restored persisted water usage state")
 
         # Repair a watermark that ran into the future. Earlier versions
         # processed the API's 0.0 placeholder rows for not-yet-elapsed hours,
@@ -95,36 +92,27 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         now_ts = int(dt_util.utcnow().timestamp())
         if self._last_processed_start is not None and self._last_processed_start > now_ts:
             clamped = int((dt_util.utcnow() - FINALIZATION_LAG).timestamp())
-            _LOGGER.info(
-                "Repairing future watermark: %s -> %s",
-                self._last_processed_start,
-                clamped,
-            )
+            _LOGGER.info("Repairing a future water usage history watermark")
             self._last_processed_start = clamped
             await self._store.async_save({
                 "current_sum": self._current_sum,
                 "last_processed_start": self._last_processed_start,
             })
 
-        _LOGGER.debug(
-            "State recovery complete: sum=%s, last_processed=%s",
-            self._current_sum,
-            self._last_processed_start,
-        )
+        _LOGGER.debug("Water usage state recovery complete")
         self._initialized = True
 
     @property
     def entity_id(self) -> str:
-        """Return the sensor entity_id for this coordinator's account."""
-        import hashlib
-        acct = hashlib.sha256(self.client.username.encode()).hexdigest()[:8]
+        """Return the sensor entity ID for this config entry."""
+        acct = entry_id_slug(self.entry.entry_id)
         return f"sensor.sjwater_{acct}_water_usage"
 
     async def _async_update_data(self) -> dict:
         """Update data via scraping."""
         try:
             # The API fetches data; last_processed_start filters already-seen readings.
-            api_data = await self.client.async_get_data("", "", None)
+            api_data = await self.client.async_get_data()
             history = api_data.get("history", [])
             latest_timestamp = api_data.get("timestamp")
 
@@ -192,24 +180,9 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 # stays in sync with the live sensor's running total.
                 total_stats.append({
                     "start": utc_start,
-                    "state": entry_state,
+                    "state": new_sum,
                     "sum": new_sum,
                 })
-
-                _LOGGER.debug(
-                    "Finalized reading: ts=%s, hourly_gal=%s, running_sum=%s",
-                    entry_ts, entry_state, new_sum,
-                )
-
-            # Persist state (finalized buckets only)
-            if last_start_ts is not None:
-                self._current_sum = new_sum
-                self._last_processed_start = last_start_ts
-                await self._store.async_save({
-                    "current_sum": self._current_sum,
-                    "last_processed_start": self._last_processed_start,
-                })
-                _LOGGER.debug("Persisted: sum=%s, last_start=%s", new_sum, last_start_ts)
 
             # Rebuild the provisional window on top of the finalized sum every
             # poll. async_import_statistics upserts by hour start, so rows for
@@ -225,17 +198,25 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 )
                 total_stats.append({
                     "start": utc_start,
-                    "state": entry_state,
+                    "state": provisional_sum,
                     "sum": provisional_sum,
                 })
             if provisional:
-                _LOGGER.debug(
-                    "Rebuilt %d provisional rows (provisional_sum=%.1f)",
-                    len(provisional), provisional_sum,
-                )
+                _LOGGER.debug("Rebuilt %d provisional statistics rows", len(provisional))
 
             if total_stats:
                 self._import_stats(total_stats)
+
+            # Do not move the watermark until the matching statistics import
+            # succeeds; otherwise an import failure would permanently skip rows.
+            if last_start_ts is not None:
+                self._current_sum = new_sum
+                self._last_processed_start = last_start_ts
+                await self._store.async_save({
+                    "current_sum": self._current_sum,
+                    "last_processed_start": self._last_processed_start,
+                })
+                _LOGGER.debug("Persisted water usage state")
 
             # Never report a lower total than a previous poll: a downward
             # provisional revision would otherwise read as a meter reset to
@@ -246,6 +227,8 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
 
             return self._build_return_data(provisional_sum, today_sum, latest_timestamp)
 
+        except InvalidAuth as exc:
+            raise ConfigEntryAuthFailed("SJ Water Hub credentials are no longer valid") from exc
         except Exception as exc:
             _LOGGER.warning("Error fetching water data: %s", exc)
             raise
@@ -268,22 +251,17 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         """
         from homeassistant.components.recorder.models import StatisticMeanType
         from homeassistant.components.recorder.statistics import async_import_statistics
-        try:
-            async_import_statistics(
-                self.hass,
-                metadata={
-                    "statistic_id": self.entity_id,
-                    "source": "recorder",
-                    "mean_type": StatisticMeanType.NONE,
-                    "has_sum": True,
-                    "name": "Water Meter Total",
-                    "unit_class": VolumeConverter.UNIT_CLASS,
-                    "unit_of_measurement": UnitOfVolume.GALLONS,
-                },
-                statistics=stats,
-            )
-            _LOGGER.debug(
-                "Imported %d stats (last sum=%.1f)", len(stats), stats[-1]["sum"]
-            )
-        except Exception as exc:
-            _LOGGER.debug("Failed to import statistics: %s", exc)
+        async_import_statistics(
+            self.hass,
+            metadata={
+                "statistic_id": self.entity_id,
+                "source": "recorder",
+                "mean_type": StatisticMeanType.NONE,
+                "has_sum": True,
+                "name": "Water Meter Total",
+                "unit_class": VolumeConverter.UNIT_CLASS,
+                "unit_of_measurement": UnitOfVolume.GALLONS,
+            },
+            statistics=stats,
+        )
+        _LOGGER.debug("Imported %d water usage statistics rows", len(stats))
