@@ -183,22 +183,42 @@ class SJWaterHubApiClient:
         if data.get("Token"):
             self._token = data.get("Token")
 
-        # The login response identifies the account through this specific field.
+        # Portal account identifier fields vary by account type.
         transaction = login_result.get("Transaction")
         tx_attributes = (
             transaction.get("Attributes") if isinstance(transaction, dict) else None
         )
-        account_identifier = (
-            tx_attributes.get("CustomerIdentifier")
-            if isinstance(tx_attributes, dict)
-            else None
-        )
-        if (
-            not isinstance(account_identifier, str)
-            or not account_identifier.isdigit()
-            or len(account_identifier) < 6
-        ):
-            raise CannotConnect("The login response did not include a valid customer identifier")
+        account_identifier = None
+        if isinstance(tx_attributes, dict):
+            account_keys = {
+                "accountnumber",
+                "accountidentifier",
+                "accountid",
+                "accountguid",
+                "accountno",
+                "customeraccountnumber",
+                "customeridentifier",
+                "customernumber",
+                "customerid",
+                "customerno",
+            }
+            _LOGGER.debug("Login account attribute keys: %s", sorted(tx_attributes))
+            for key, value in tx_attributes.items():
+                if not isinstance(key, str):
+                    continue
+                normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
+                if normalized_key not in account_keys:
+                    continue
+                if isinstance(value, int) and not isinstance(value, bool):
+                    value = str(value)
+                if isinstance(value, str) and value.isdigit() and len(value) >= 6:
+                    account_identifier = value
+                    break
+
+        if account_identifier is None:
+            raise CannotConnect(
+                "The login response did not include a supported numeric account identifier"
+            )
 
         self._account_guid = account_identifier
         _LOGGER.debug("Discovered account identifier")

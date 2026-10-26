@@ -22,6 +22,7 @@ class TestAsyncSetupEntry:
         entry.entry_id = "test_entry_1"
         entry.runtime_data = None
 
+        setup_order = []
         with patch(
             "custom_components.sjwater.async_get_clientsession",
         ) as mock_session:
@@ -34,7 +35,12 @@ class TestAsyncSetupEntry:
                 ) as mock_coord_cls:
                     mock_coord = mock_coord_cls.return_value
                     mock_coord.async_initialize = AsyncMock()
-                    mock_coord.async_config_entry_first_refresh = AsyncMock()
+                    mock_coord.async_config_entry_first_refresh = AsyncMock(
+                        side_effect=lambda: setup_order.append("refresh")
+                    )
+                    hass.config_entries.async_forward_entry_setups.side_effect = (
+                        lambda *_: setup_order.append("forward")
+                    )
 
                     result = await async_setup_entry(hass, entry)
 
@@ -49,6 +55,7 @@ class TestAsyncSetupEntry:
         assert entry.runtime_data is mock_coord
         hass.config_entries.async_forward_entry_setups.assert_called_once_with(entry, PLATFORMS)
         mock_coord.async_config_entry_first_refresh.assert_called_once()
+        assert setup_order == ["refresh", "forward"]
 
     async def test_setup_fails_on_initialize_error(self):
         hass = MagicMock()
@@ -119,6 +126,7 @@ class TestAsyncSetupEntry:
 
             with pytest.raises(Exception, match="Refresh failed"):
                 await async_setup_entry(hass, entry)
+            hass.config_entries.async_forward_entry_setups.assert_not_called()
 
 
 class TestAsyncUnloadEntry:

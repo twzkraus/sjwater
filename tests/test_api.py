@@ -75,21 +75,43 @@ class TestAsyncLogin:
         mock_get_factory(text=load_fixture("login_page.html"))
         mock_post_factory(data=load_json_fixture("login_success_no_acct.json"))
 
-        with pytest.raises(CannotConnect, match="valid customer identifier"):
+        with pytest.raises(CannotConnect, match="supported numeric account identifier"):
             await api_client.async_login()
         assert api_client._token is None
+
+    @pytest.mark.parametrize(
+        "key,value",
+        [
+            ("AccountNumber", "987654321"),
+            ("AccountIdentifier", 987654321),
+            ("AccountID", "987654321"),
+            ("AccountGuid", "987654321"),
+            ("CustomerID", "987654321"),
+            ("CustomerNumber", "987654321"),
+        ],
+    )
+    async def test_discovers_supported_account_identifier_keys(
+        self, api_client, mock_get_factory, mock_post_factory, key, value
+    ):
+        response = load_json_fixture("login_success.json")
+        response["VXengage_Login"]["Transaction"]["Attributes"] = {key: value}
+        mock_get_factory(text=load_fixture("login_page.html"))
+        mock_post_factory(data=response)
+
+        assert await api_client.async_login() is True
+        assert api_client._account_guid == "987654321"
 
     async def test_ignores_unrecognized_numeric_account_attributes(
         self, api_client, mock_get_factory, mock_post_factory
     ):
         response = load_json_fixture("login_success.json")
         response["VXengage_Login"]["Transaction"]["Attributes"] = {
-            "PhoneNumber": "1234567890"
+            "CustomerPhoneNumber": "1234567890"
         }
         mock_get_factory(text=load_fixture("login_page.html"))
         mock_post_factory(data=response)
 
-        with pytest.raises(CannotConnect, match="valid customer identifier"):
+        with pytest.raises(CannotConnect, match="supported numeric account identifier"):
             await api_client.async_login()
         assert api_client._account_guid is None
         assert api_client._token is None

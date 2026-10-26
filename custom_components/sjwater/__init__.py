@@ -30,13 +30,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 2. Store coordinator reference so sensors can access it.
     entry.runtime_data = coordinator
 
-    # 3. Forward the config entry to the sensor platform to create entities.
-    #    Entities will be created with the coordinator already initialized.
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # 4. Trigger the first data fetch to populate the entity state and
-    #    backfill historical statistics into the Energy Dashboard.
+    # Refresh before setting up platforms so retries cannot forward a platform
+    # that was already loaded by an earlier failed setup attempt.
     await coordinator.async_config_entry_first_refresh()
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
