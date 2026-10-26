@@ -319,7 +319,12 @@ class SJWaterHubApiClient:
                     invalid_timestamp_count,
                 )
 
-        latest_reading = parsed_history[-1] if parsed_history else None
+        now_utc = dt_util.utcnow()
+        latest_reading = max(
+            (reading for reading in parsed_history if reading["start"] <= now_utc),
+            key=lambda reading: reading["start"],
+            default=None,
+        )
 
         return {
             "gallons": latest_reading["state"] if latest_reading else 0.0,

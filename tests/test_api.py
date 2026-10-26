@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 from unittest.mock import MagicMock, patch
@@ -410,6 +410,31 @@ class TestAsyncGetDataEdgeCases:
         assert result["gallons"] == 2.0
         assert result["timestamp"] == result["history"][-1]["start"]
         assert result["timestamp"] != result["history"][-2]["start"]
+
+    async def test_future_readings_do_not_become_latest_reading(
+        self, authenticated_client, mock_session, mock_post_factory
+    ):
+        mock_post_factory(data={
+            "VXengage_GetHourlyGraph": {
+                "Success": True,
+                "ComplexSlidingGraphDataSets": [
+                    {"data": ["1.0", "2.0", "0.0"]}
+                ],
+                "ComplexLabels": [
+                    "2024-06-06T11:00:00+00:00",
+                    "2024-06-06T13:00:00+00:00",
+                    "2024-06-06T22:00:00+00:00",
+                ],
+            }
+        })
+        now = datetime(2024, 6, 6, 13, 30, tzinfo=timezone.utc)
+
+        with patch("custom_components.sjwater.api.dt_util.utcnow", return_value=now):
+            result = await authenticated_client.async_get_data()
+
+        assert len(result["history"]) == 3
+        assert result["gallons"] == 2.0
+        assert result["timestamp"] == result["history"][1]["start"]
 
     async def test_negative_gallons_clamped(self, authenticated_client, mock_session, mock_post_factory):
         mock_post_factory(data=load_json_fixture("hourly_graph_negative.json"))
