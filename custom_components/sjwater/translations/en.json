@@ -1,7 +1,9 @@
 {
     "config": {
         "abort": {
-            "already_configured": "Device is already configured"
+            "already_configured": "Device is already configured",
+            "reauth_successful": "Credentials updated successfully",
+            "reauth_entry_not_found": "The SJ Water Hub configuration could not be found"
         },
         "error": {
             "cannot_connect": "Failed to connect to the water company",
@@ -16,6 +18,13 @@
                 },
                 "description": "Enter your login credentials for the water company.",
                 "title": "Connect to SJ Water Hub"
+            },
+            "reauth_confirm": {
+                "data": {
+                    "password": "Password"
+                },
+                "description": "Re-enter the password for your SJ Water Hub account.",
+                "title": "Update SJ Water Hub credentials"
             }
         }
     }
