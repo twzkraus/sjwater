@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfVolume
+from homeassistant.util import dt as dt_util
 
 from custom_components.sjwater.sensor import (
     SJWaterHubSensor,
@@ -85,9 +86,16 @@ class TestSJWaterHubSensor:
         assert info["model"] == "Scraped Hub"
 
     async def test_extra_state_attributes_with_data(self, total_sensor, mock_coordinator):
-        mock_coordinator.data = {"current_sum": 100.0, "timestamp": "2024-06-06T12:00:00"}
+        timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
+        mock_coordinator.data = {
+            "current_sum": 100.0,
+            "timestamp": timestamp,
+            "last_successful_update": update_timestamp,
+        }
         attrs = total_sensor.extra_state_attributes
-        assert attrs.get("recorded_at") == "2024-06-06T12:00:00"
+        assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_extra_state_attributes_empty_when_no_data(self, total_sensor, mock_coordinator):
         mock_coordinator.data = None
@@ -102,6 +110,18 @@ class TestSJWaterHubDailySensor:
     async def test_returns_none_when_no_data(self, daily_sensor, mock_coordinator):
         mock_coordinator.data = None
         assert daily_sensor.native_value is None
+
+    async def test_extra_state_attributes_with_data(self, daily_sensor, mock_coordinator):
+        timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
+        mock_coordinator.data = {
+            "today_sum": 5.5,
+            "timestamp": timestamp,
+            "last_successful_update": update_timestamp,
+        }
+        attrs = daily_sensor.extra_state_attributes
+        assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_prevents_negative_values(self, daily_sensor, mock_coordinator):
         mock_coordinator.data = {"current_sum": 100.0, "today_sum": -3.0}

@@ -113,12 +113,18 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         try:
             # The API fetches data; last_processed_start filters already-seen readings.
             api_data = await self.client.async_get_data()
+            last_successful_update = dt_util.utcnow()
             history = api_data.get("history", [])
             latest_timestamp = api_data.get("timestamp")
 
             if not history:
                 _LOGGER.debug("No history returned from API")
-                return self._build_return_data(self._current_sum or 0.0, 0.0, latest_timestamp)
+                return self._build_return_data(
+                    self._current_sum or 0.0,
+                    0.0,
+                    latest_timestamp,
+                    last_successful_update,
+                )
 
             _LOGGER.debug("API returned %d history entries", len(history))
 
@@ -225,7 +231,12 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 provisional_sum = max(provisional_sum, self._last_reported_sum)
             self._last_reported_sum = provisional_sum
 
-            return self._build_return_data(provisional_sum, today_sum, latest_timestamp)
+            return self._build_return_data(
+                provisional_sum,
+                today_sum,
+                latest_timestamp,
+                last_successful_update,
+            )
 
         except InvalidAuth as exc:
             raise ConfigEntryAuthFailed("SJ Water Hub credentials are no longer valid") from exc
@@ -233,12 +244,19 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Error fetching water data: %s", exc)
             raise
 
-    def _build_return_data(self, current_sum: float, today_sum: float, latest_timestamp) -> dict:
+    def _build_return_data(
+        self,
+        current_sum: float,
+        today_sum: float,
+        latest_timestamp: datetime | None,
+        last_successful_update: datetime,
+    ) -> dict:
         """Build the data dict returned to sensor entities."""
         return {
             "current_sum": current_sum,
             "today_sum": today_sum,
             "timestamp": latest_timestamp,
+            "last_successful_update": last_successful_update,
         }
 
     def _import_stats(self, stats: list[dict]) -> None:

@@ -13,6 +13,14 @@ import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, entry_id_slug
 
+
+def _local_timestamp(timestamp: datetime | None) -> datetime | None:
+    """Convert a UTC timestamp to Home Assistant's configured time zone."""
+    if timestamp is None:
+        return None
+    return dt_util.as_local(timestamp)
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the sensor platform from a config entry."""
     coordinator = entry.runtime_data
@@ -63,10 +71,13 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        """Include the scraped timestamp in the standard state machine as well."""
+        """Include reading and successful-update timestamps."""
         if self.coordinator.data is not None:
             return {
-                "recorded_at": self.coordinator.data.get("timestamp")
+                "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "last_successful_update": _local_timestamp(
+                    self.coordinator.data.get("last_successful_update")
+                ),
             }
         return {}
 
@@ -108,6 +119,18 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
         if self.coordinator.data is not None:
             return max(0.0, self.coordinator.data.get("today_sum", 0.0))
         return None
+
+    @property
+    def extra_state_attributes(self):
+        """Include reading and successful-update timestamps."""
+        if self.coordinator.data is not None:
+            return {
+                "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "last_successful_update": _local_timestamp(
+                    self.coordinator.data.get("last_successful_update")
+                ),
+            }
+        return {}
 
     @property
     def last_reset(self):
