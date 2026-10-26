@@ -3,12 +3,13 @@ import logging
 import re
 
 import aiohttp
-from dateutil.parser import parse as dt_parse
+from dateutil.parser import ParserError, parse as dt_parse
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 # The portal silently rejects logins from non-browser clients (Success=false,
 # ErrorCode=0), so all requests must present browser-like headers.
@@ -68,13 +69,36 @@ class SJWaterHubApiClient:
 
         _LOGGER.debug("Sending RequestBroker Actions: %s", actions)
 
-        async with self.session.post(self.base_url, data=json.dumps(outer_payload), headers=headers) as response:
+        async with self.session.post(
+            self.base_url,
+            data=json.dumps(outer_payload),
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+        ) as response:
+            if 300 <= response.status < 400:
+                raise CannotConnect("The water portal redirected an API request")
             response.raise_for_status()
             response_json = await response.json()
             return response_json
 
     async def async_login(self) -> bool:
-        """Authenticate and grab the session Token and Account Guidance."""
+        """Authenticate and discover the account identifier."""
+        self._token = None
+        self._account_guid = None
+        try:
+            success = await self._async_login()
+            if not success:
+                self._token = None
+                self._account_guid = None
+            return success
+        except Exception:
+            self._token = None
+            self._account_guid = None
+            raise
+
+    async def _async_login(self) -> bool:
+        """Perform the portal login after clearing any previous session state."""
 
         # 1. Provide the necessary GET request to establish initially required cookies
         #    such as 'ApplicationGatewayAffinity' and extract the anti-forgery Token.
@@ -84,15 +108,21 @@ class SJWaterHubApiClient:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        async with self.session.get(login_url, headers=get_headers) as page_response:
+        async with self.session.get(
+            login_url,
+            headers=get_headers,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+        ) as page_response:
+            if 300 <= page_response.status < 400:
+                raise CannotConnect("The water portal redirected the login page")
             page_response.raise_for_status()
             html = await page_response.text()
 
             # 2. Extract Token using regex from the hidden input: id="Token"
             match = re.search(r'id="Token"[^>]*value="([^"]+)"', html)
             if not match:
-                _LOGGER.error("Failed to extract anti-forgery Token from the login page! The layout may have changed.")
-                return False
+                raise CannotConnect("The login page did not contain the expected security token")
 
             self._token = match.group(1)
             _LOGGER.debug("Extracted initial session Token")
@@ -111,7 +141,12 @@ class SJWaterHubApiClient:
             "https://www.sjwaterhub.com/api/WebApi/CreateExceptionPermissions",
             data={"token": self._token, "sitePrefix": ""},
             headers=exc_headers,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
         ) as exc_response:
+            if 300 <= exc_response.status < 400:
+                raise CannotConnect("The water portal redirected token registration")
+            exc_response.raise_for_status()
             _LOGGER.debug("CreateExceptionPermissions status: %s", exc_response.status)
 
         # 3. Use the extracted token to login
@@ -126,18 +161,21 @@ class SJWaterHubApiClient:
 
         data = await self._post_request("VXengage_Login", "Login", login_additions)
 
+        if not isinstance(data, dict) or not isinstance(data.get("VXengage_Login"), dict):
+            raise CannotConnect("The water portal returned an unexpected login response")
+
+        login_result = data["VXengage_Login"]
+        if "Success" not in login_result:
+            raise CannotConnect("The water portal returned an incomplete login response")
+
         _LOGGER.debug(
-            "Login response (Token redacted): %s",
-            json.dumps({k: v for k, v in data.items() if k != "Token"}, default=str),
+            "Login result: authorized=%s valid=%s success=%s",
+            data.get("Authorized"),
+            data.get("Valid"),
+            login_result.get("Success"),
         )
 
-        _LOGGER.debug("Login completed")
-
-        # A successful login returns {'Authorized': True} and {'Valid': True}
-        # The internal 'VXengage_Login' object contains the Success stat.
-        login_result = data.get("VXengage_Login", {})
-
-        if not login_result.get("Success"):
+        if login_result.get("Success") is not True:
             _LOGGER.error("Login failed")
             return False
 
@@ -145,15 +183,25 @@ class SJWaterHubApiClient:
         if data.get("Token"):
             self._token = data.get("Token")
 
-        # Dynamically discover the account number from login response
-        # attributes. Different account types may use different keys.
-        tx_attributes = login_result.get("Transaction", {}).get("Attributes", {})
+        # The login response identifies the account through this specific field.
+        transaction = login_result.get("Transaction")
+        tx_attributes = (
+            transaction.get("Attributes") if isinstance(transaction, dict) else None
+        )
+        account_identifier = (
+            tx_attributes.get("CustomerIdentifier")
+            if isinstance(tx_attributes, dict)
+            else None
+        )
+        if (
+            not isinstance(account_identifier, str)
+            or not account_identifier.isdigit()
+            or len(account_identifier) < 6
+        ):
+            raise CannotConnect("The login response did not include a valid customer identifier")
 
-        for key, value in tx_attributes.items():
-            if isinstance(value, str) and value.isdigit() and len(value) >= 6:
-                self._account_guid = value
-                _LOGGER.debug("Discovered account number from attribute key: %s", key)
-                break
+        self._account_guid = account_identifier
+        _LOGGER.debug("Discovered account identifier")
 
         return True
 
@@ -165,33 +213,30 @@ class SJWaterHubApiClient:
         """
         try:
             success = await self.async_login()
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise CannotConnect(f"Cannot reach SJ Water Hub: {err}") from err
-        except Exception as err:
-            raise CannotConnect(f"Unexpected error during login: {err}") from err
 
         if not success:
             raise InvalidAuth("Invalid username or password")
         return True
 
-    async def async_get_data(self, start_date_query: str = "", end_date_query: str = "", account_number: str = None) -> dict:
+    async def async_get_data(self) -> dict:
         """Fetch data from the water company's RequestBroker API."""
 
         # Ensure we are logged in first
         if not self._token:
-            await self.async_login()
+            if not await self.async_login():
+                raise InvalidAuth("Invalid username or password")
 
-        # Try to use configured account number, or fallback to auto-detected one
-        account = account_number or self._account_guid
-        if not account:
-            raise CannotConnect("Account number could not be discovered from login response")
+        if not self._account_guid:
+            raise CannotConnect("Account identifier could not be discovered from login response")
 
         # Using the exact payload expected by VXengage_GetHourlyGraph
         data_additions = {
-            "AccountNumber": account,
+            "AccountNumber": self._account_guid,
             "Template": "HourlyWaterUsage",
-            "StartDate": start_date_query,
-            "EndDate": end_date_query,
+            "StartDate": "",
+            "EndDate": "",
             "GroupData": True
         }
 
@@ -199,17 +244,21 @@ class SJWaterHubApiClient:
 
         if data.get("SessionExpired"):
             _LOGGER.debug("Session expired. Re-authenticating...")
-            login_success = await self.async_login()
-            if not login_success:
-                raise Exception("Re-authentication failed")
+            if not await self.async_login():
+                raise InvalidAuth("Invalid username or password")
+            if not self._account_guid:
+                raise CannotConnect("Account identifier could not be discovered from login response")
+            data_additions["AccountNumber"] = self._account_guid
             data = await self._post_request("VXengage_GetHourlyGraph", "UnderstandUsage", data_additions)
+            if data.get("SessionExpired"):
+                raise InvalidAuth("The water portal session expired after reauthentication")
 
         # Extract the VXengage_GetHourlyGraph inner response
         graph_data = data.get("VXengage_GetHourlyGraph", {})
 
         if not graph_data or not graph_data.get("Success"):
             _LOGGER.error("Failed to fetch hourly graph data")
-            raise Exception("API returned unsuccessful response for hourly graph.")
+            raise CannotConnect("The water portal returned unsuccessful hourly graph data")
 
         # Update our token if it revolved
         if data.get("Token"):
@@ -221,89 +270,57 @@ class SJWaterHubApiClient:
         datasets = graph_data.get("ComplexSlidingGraphDataSets", [])
         labels = graph_data.get("ComplexLabels", [])
 
-        parsed_gallons = None
-        parsed_timestamp = None
         parsed_history = []
 
-        if datasets and labels:
-            try:
-                gallons_data = datasets[0].get("data", [])
+        if datasets:
+            gallons_data = datasets[0].get("data", [])
+            local_tz = dt_util.DEFAULT_TIME_ZONE
+            invalid_timestamp_count = 0
 
-                # Get the local timezone from HA's configuration
-                local_tz = dt_util.DEFAULT_TIME_ZONE
+            for idx, value in enumerate(gallons_data):
+                if value == "":
+                    continue
+                try:
+                    gallons = max(0.0, float(value))
+                except (TypeError, ValueError):
+                    _LOGGER.debug("Skipping invalid water reading at index %d", idx)
+                    continue
 
-                for idx, val in enumerate(gallons_data):
-                    if val != "":
-                        try:
-                            # Convert label string into a datetime object
-                            label_val = labels[idx] if idx < len(labels) else ""
-                            # If it's a dict from ComplexLabels, try to extract a 'Date' or similar key
-                            if isinstance(label_val, dict):
-                                label_str = label_val.get("Date", label_val.get("Label", str(label_val)))
-                            elif isinstance(label_val, list) and len(label_val) > 0:
-                                label_str = " ".join(str(x) for x in label_val)
-                            else:
-                                label_str = str(label_val)
+                label_val = labels[idx] if idx < len(labels) else ""
+                if isinstance(label_val, dict):
+                    label_str = label_val.get("Date", label_val.get("Label", ""))
+                elif isinstance(label_val, list):
+                    label_str = " ".join(str(part) for part in label_val)
+                else:
+                    label_str = str(label_val)
 
-                            try:
-                                dt_naive = dt_parse(label_str)
-                            except Exception as parse_e:
-                                _LOGGER.debug("Failed to parse label '%s': %s", label_str, parse_e)
-                                dt_naive = dt_util.now()
+                try:
+                    dt_naive = dt_parse(label_str)
+                except (ParserError, TypeError, ValueError, OverflowError):
+                    invalid_timestamp_count += 1
+                    continue
 
-                            # The SJ Water company data is in local time, not UTC.
-                            # If we inject local time as UTC, Home Assistant offsets it by the
-                            # timezone offset, shifting readings to wrong hours.
-                            # Make the naive datetime aware with the local timezone.
-                            if dt_naive.tzinfo is None:
-                                dt_aware = dt_naive.replace(tzinfo=local_tz)
-                            else:
-                                dt_aware = dt_naive
+                if dt_naive.tzinfo is None:
+                    dt_aware = dt_naive.replace(tzinfo=local_tz)
+                else:
+                    dt_aware = dt_naive
 
-                            # Convert to UTC for Home Assistant's database
-                            dt_utc = dt_util.as_utc(dt_aware)
+                parsed_history.append({
+                    "start": dt_util.as_utc(dt_aware),
+                    "state": gallons,
+                })
 
-                            parsed_history.append({
-                                "start": dt_utc,
-                                "state": max(0.0, float(val))
-                            })
+            if invalid_timestamp_count:
+                _LOGGER.warning(
+                    "Skipped %d water readings with invalid timestamps",
+                    invalid_timestamp_count,
+                )
 
-                        except Exception as dt_err:
-                            _LOGGER.debug("Could not parse date %s: %s", labels[idx] if idx < len(labels) else 'UNKNOWN', dt_err)
-
-                # 2. Grab the latest reading for the main sensor
-                # Get the last valid data point (ignoring empty strings if any)
-                for index in range(len(gallons_data) - 1, -1, -1):
-                    val = gallons_data[index]
-                    if val != "":
-                        parsed_gallons = float(val)
-                        # The label for this point
-                        label_str = labels[index] if index < len(labels) else ""
-                        _LOGGER.debug("Found latest graph data: %s at %s", parsed_gallons, label_str)
-                        # Also set the timestamp from this reading's entry in parsed_history
-                        # (find the matching entry by index/value)
-                        for h in reversed(parsed_history):
-                            if abs(h["state"] - parsed_gallons) < 0.001:
-                                parsed_timestamp = h["start"]
-                                break
-                        break
-
-            except Exception as e:
-                _LOGGER.error("Error parsing graph data sets: %s", e)
-
-        # If we couldn't parse any gallons, default to 0
-        if parsed_gallons is None:
-            parsed_gallons = 0.0
-        else:
-            parsed_gallons = max(0.0, parsed_gallons)
-
-        # Use the actual timestamp from the API, or fall back to now()
-        if parsed_timestamp is None:
-            parsed_timestamp = dt_util.utcnow()
+        latest_reading = parsed_history[-1] if parsed_history else None
 
         return {
-            "gallons": parsed_gallons,
-            "timestamp": parsed_timestamp,
+            "gallons": latest_reading["state"] if latest_reading else 0.0,
+            "timestamp": latest_reading["start"] if latest_reading else None,
             "last_updated": graph_data.get("LastUpdated", ""),
             "history": parsed_history,
         }
