@@ -126,7 +126,7 @@ class TestAsyncStepUser:
         flow = _make_flow()
 
         username = "test@example.com"
-        expected_id = hashlib.sha256(username.encode()).hexdigest()[:8]
+        expected_id = hashlib.sha256(username.strip().casefold().encode()).hexdigest()
 
         with patch(
             "custom_components.sjwater.config_flow.validate_input",
@@ -138,6 +138,35 @@ class TestAsyncStepUser:
 
         assert result["type"] == "create_entry"
         assert flow.unique_id == expected_id
+
+
+class TestReauth:
+    async def test_reauth_updates_password_and_reloads_entry(self):
+        flow = _make_flow()
+        entry = MagicMock()
+        entry.data = {"username": "test@example.com", "password": "old-password"}
+        flow.context = {"entry_id": "entry-1"}
+        flow.hass.config_entries.async_get_entry.return_value = entry
+        flow.async_update_reload_and_abort = MagicMock(return_value={"type": "abort"})
+
+        with patch(
+            "custom_components.sjwater.config_flow.validate_input",
+            new=AsyncMock(return_value={"title": "SJ Water Hub"}),
+        ) as validate:
+            result = await flow.async_step_reauth_confirm(
+                user_input={"password": "new-password"}
+            )
+
+        assert result == {"type": "abort"}
+        validate.assert_awaited_once_with(
+            flow.hass,
+            {"username": "test@example.com", "password": "new-password"},
+        )
+        flow.async_update_reload_and_abort.assert_called_once_with(
+            entry,
+            data_updates={"password": "new-password"},
+            reason="reauth_successful",
+        )
 
 
 class TestValidateInput:

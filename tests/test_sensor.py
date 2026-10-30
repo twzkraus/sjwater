@@ -1,25 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfVolume
+from homeassistant.util import dt as dt_util
 
 from custom_components.sjwater.sensor import (
     SJWaterHubSensor,
     SJWaterHubDailySensor,
-    _account_id,
     async_setup_entry,
 )
-from custom_components.sjwater.const import DOMAIN
+from custom_components.sjwater.const import DOMAIN, entry_id_slug
 
 
 @pytest.fixture
 def mock_coordinator():
     coord = MagicMock()
     coord.client.username = "test@example.com"
+    coord.entry.entry_id = "test-entry-1"
     coord.data = None
     return coord
 
@@ -34,17 +35,14 @@ def daily_sensor(mock_coordinator):
     return SJWaterHubDailySensor(mock_coordinator)
 
 
-class TestAccountId:
-    def test_derives_hash_from_username(self):
-        result = _account_id("test@example.com")
-        assert result == "973dfe46"
-        assert len(result) == 8
+class TestEntryIdSlug:
+    def test_replaces_hyphens_for_entity_ids(self):
+        assert entry_id_slug("abcd-1234") == "abcd_1234"
 
-    def test_consistent_for_same_username(self):
-        assert _account_id("test@example.com") == _account_id("test@example.com")
-
-    def test_different_for_different_usernames(self):
-        assert _account_id("user1@example.com") != _account_id("user2@example.com")
+    def test_lowercases_config_entry_ids(self):
+        assert entry_id_slug("01M5VCP6D3BRV8CV844DW0QX4E") == (
+            "01m5vcp6d3brv8cv844dw0qx4e"
+        )
 
 
 class TestSJWaterHubSensor:
@@ -76,21 +74,31 @@ class TestSJWaterHubSensor:
         assert total_sensor.has_entity_name is True
 
     async def test_correct_entity_id_format(self, total_sensor, mock_coordinator):
-        expected_id = "sensor.sjwater_973dfe46_water_usage"
+        expected_id = "sensor.sjwater_test_entry_1_water_usage"
         assert total_sensor.entity_id == expected_id
-        assert total_sensor.unique_id == "sjwater_973dfe46_water_usage"
+        assert total_sensor.unique_id == "sjwater_test_entry_1_water_usage"
 
     async def test_device_info_structure(self, total_sensor):
         info = total_sensor.device_info
-        assert info["identifiers"] == {(DOMAIN, "973dfe46")}
+        assert info["identifiers"] == {(DOMAIN, "test-entry-1")}
         assert info["name"] == "SJ Water Hub"
         assert info["manufacturer"] == "SJ Water Company"
         assert info["model"] == "Scraped Hub"
 
     async def test_extra_state_attributes_with_data(self, total_sensor, mock_coordinator):
-        mock_coordinator.data = {"current_sum": 100.0, "timestamp": "2024-06-06T12:00:00"}
+        timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        data_updated_at = datetime(2024, 6, 6, 11, tzinfo=timezone.utc)
+        update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
+        mock_coordinator.data = {
+            "current_sum": 100.0,
+            "timestamp": timestamp,
+            "data_updated_at": data_updated_at,
+            "last_successful_update": update_timestamp,
+        }
         attrs = total_sensor.extra_state_attributes
-        assert attrs.get("recorded_at") == "2024-06-06T12:00:00"
+        assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["data_updated_at"] == dt_util.as_local(data_updated_at)
+        assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_extra_state_attributes_empty_when_no_data(self, total_sensor, mock_coordinator):
         mock_coordinator.data = None
@@ -105,6 +113,21 @@ class TestSJWaterHubDailySensor:
     async def test_returns_none_when_no_data(self, daily_sensor, mock_coordinator):
         mock_coordinator.data = None
         assert daily_sensor.native_value is None
+
+    async def test_extra_state_attributes_with_data(self, daily_sensor, mock_coordinator):
+        timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        data_updated_at = datetime(2024, 6, 6, 11, tzinfo=timezone.utc)
+        update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
+        mock_coordinator.data = {
+            "today_sum": 5.5,
+            "timestamp": timestamp,
+            "data_updated_at": data_updated_at,
+            "last_successful_update": update_timestamp,
+        }
+        attrs = daily_sensor.extra_state_attributes
+        assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["data_updated_at"] == dt_util.as_local(data_updated_at)
+        assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_prevents_negative_values(self, daily_sensor, mock_coordinator):
         mock_coordinator.data = {"current_sum": 100.0, "today_sum": -3.0}
@@ -123,9 +146,9 @@ class TestSJWaterHubDailySensor:
         assert daily_sensor.icon == "mdi:water-pump"
 
     async def test_correct_entity_id_format(self, daily_sensor, mock_coordinator):
-        expected_id = "sensor.sjwater_973dfe46_todays_water_usage"
+        expected_id = "sensor.sjwater_test_entry_1_todays_water_usage"
         assert daily_sensor.entity_id == expected_id
-        assert daily_sensor.unique_id == "sjwater_973dfe46_todays_water_usage"
+        assert daily_sensor.unique_id == "sjwater_test_entry_1_todays_water_usage"
 
     async def test_device_info_matches_total_sensor(self, daily_sensor, total_sensor):
         assert daily_sensor.device_info == total_sensor.device_info
@@ -168,8 +191,10 @@ class TestAsyncSetupEntry:
     async def test_creates_both_sensors(self):
         mock_hass = MagicMock()
         mock_entry = MagicMock()
+        mock_entry.entry_id = "test-entry-1"
         mock_coordinator = MagicMock()
         mock_coordinator.client.username = "test@example.com"
+        mock_coordinator.entry = mock_entry
         mock_entry.runtime_data = mock_coordinator
         mock_add_entities = MagicMock()
 

@@ -11,13 +11,15 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, entry_id_slug
 
-import hashlib
 
-def _account_id(username: str) -> str:
-    """Return a short stable non-PII identifier derived from the username."""
-    return hashlib.sha256(username.encode()).hexdigest()[:8]
+def _local_timestamp(timestamp: datetime | None) -> datetime | None:
+    """Convert a UTC timestamp to Home Assistant's configured time zone."""
+    if timestamp is None:
+        return None
+    return dt_util.as_local(timestamp)
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the sensor platform from a config entry."""
@@ -43,7 +45,7 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         
-        acct = _account_id(coordinator.client.username)
+        acct = entry_id_slug(coordinator.entry.entry_id)
         self.entity_id = f"sensor.sjwater_{acct}_water_usage"
         self._attr_unique_id = f"sjwater_{acct}_water_usage"
 
@@ -51,7 +53,7 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device information to link entities up."""
         return {
-            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "identifiers": {(DOMAIN, self.coordinator.entry.entry_id)},
             "name": "SJ Water Hub",
             "manufacturer": "SJ Water Company",
             "model": "Scraped Hub",
@@ -69,10 +71,16 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        """Include the scraped timestamp in the standard state machine as well."""
+        """Include reading and successful-update timestamps."""
         if self.coordinator.data is not None:
             return {
-                "recorded_at": self.coordinator.data.get("timestamp")
+                "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "data_updated_at": _local_timestamp(
+                    self.coordinator.data.get("data_updated_at")
+                ),
+                "last_successful_update": _local_timestamp(
+                    self.coordinator.data.get("last_successful_update")
+                ),
             }
         return {}
 
@@ -93,7 +101,7 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator):
         """Initialize the sensor."""
         super().__init__(coordinator)
-        acct = _account_id(coordinator.client.username)
+        acct = entry_id_slug(coordinator.entry.entry_id)
         self.entity_id = f"sensor.sjwater_{acct}_todays_water_usage"
         self._attr_unique_id = f"sjwater_{acct}_todays_water_usage"
         self._last_reset_midnight: datetime | None = None
@@ -102,7 +110,7 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device information to link entities up."""
         return {
-            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "identifiers": {(DOMAIN, self.coordinator.entry.entry_id)},
             "name": "SJ Water Hub",
             "manufacturer": "SJ Water Company",
             "model": "Scraped Hub",
@@ -114,6 +122,21 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
         if self.coordinator.data is not None:
             return max(0.0, self.coordinator.data.get("today_sum", 0.0))
         return None
+
+    @property
+    def extra_state_attributes(self):
+        """Include reading and successful-update timestamps."""
+        if self.coordinator.data is not None:
+            return {
+                "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "data_updated_at": _local_timestamp(
+                    self.coordinator.data.get("data_updated_at")
+                ),
+                "last_successful_update": _local_timestamp(
+                    self.coordinator.data.get("last_successful_update")
+                ),
+            }
+        return {}
 
     @property
     def last_reset(self):

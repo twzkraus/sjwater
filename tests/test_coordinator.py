@@ -4,8 +4,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.util import dt as dt_util
 
+from custom_components.sjwater.api import InvalidAuth
 from custom_components.sjwater.coordinator import SJWaterHubCoordinator
 
 
@@ -46,6 +48,7 @@ class TestAsyncUpdateData:
         coordinator._last_processed_start = None
 
         now = dt_util.utcnow()
+        data_updated_at = now - timedelta(hours=1)
         # Older than FINALIZATION_LAG so the entries are finalized/persisted
         history = [
             {"start": now - timedelta(hours=50), "state": "1.5"},
@@ -56,6 +59,7 @@ class TestAsyncUpdateData:
             "gallons": 2.5,
             "timestamp": now,
             "last_updated": "2024-06-06T12:00:00",
+            "data_updated_at": data_updated_at,
             "history": history,
         })):
             with patch.object(coordinator, "_import_stats") as mock_import:
@@ -65,8 +69,12 @@ class TestAsyncUpdateData:
         assert result["current_sum"] == 4.0
         assert "today_sum" in result
         assert "timestamp" in result
+        assert result["data_updated_at"] == data_updated_at
+        assert isinstance(result["last_successful_update"], datetime)
+        assert result["last_successful_update"].utcoffset() == timedelta(0)
         mock_store.async_save.assert_called_once()
         mock_import.assert_called_once()
+        assert [row["state"] for row in mock_import.call_args[0][0]] == [1.5, 4.0]
 
     async def test_skips_already_processed_entries(self, coordinator, mock_store):
         coordinator._current_sum = 10.0
@@ -106,6 +114,8 @@ class TestAsyncUpdateData:
 
         assert result["current_sum"] == 0.0
         assert result["today_sum"] == 0.0
+        assert isinstance(result["last_successful_update"], datetime)
+        assert result["last_successful_update"].utcoffset() == timedelta(0)
         mock_store.async_save.assert_not_called()
         mock_import.assert_not_called()
 
@@ -140,6 +150,15 @@ class TestAsyncUpdateData:
             new=AsyncMock(side_effect=Exception("API error")),
         ):
             with pytest.raises(Exception, match="API error"):
+                await coordinator._async_update_data()
+
+    async def test_invalid_auth_starts_reauth(self, coordinator):
+        with patch.object(
+            coordinator.client,
+            "async_get_data",
+            new=AsyncMock(side_effect=InvalidAuth("Invalid username or password")),
+        ):
+            with pytest.raises(ConfigEntryAuthFailed):
                 await coordinator._async_update_data()
 
     async def test_current_sum_none_on_first_run(self, coordinator, mock_store):
@@ -259,6 +278,7 @@ class TestFinalizationWindow:
         mock_import.assert_called_once()
         rows = mock_import.call_args[0][0]
         assert [r["sum"] for r in rows] == [11.0, 13.0]
+        assert [r["state"] for r in rows] == [11.0, 13.0]
         # ...but never advance the persisted watermark/sum, so late-arriving
         # revisions for these hours are re-processed on the next poll.
         mock_store.async_save.assert_not_called()
@@ -313,6 +333,33 @@ class TestFinalizationWindow:
         # A downward provisional revision must not make the TOTAL_INCREASING
         # sensor dip (HA would read it as a meter reset).
         assert result["current_sum"] == 20.0
+
+    async def test_statistics_failure_does_not_advance_watermark(
+        self, coordinator, mock_store
+    ):
+        coordinator._current_sum = 7.0
+        coordinator._last_processed_start = None
+        now = dt_util.utcnow()
+        history = [{"start": now - timedelta(hours=50), "state": 3.0}]
+
+        with patch.object(
+            coordinator.client,
+            "async_get_data",
+            new=AsyncMock(return_value={"history": history, "timestamp": now}),
+        ), patch.object(
+            coordinator,
+            "_import_stats",
+            side_effect=RuntimeError("Import failed"),
+        ), patch(
+            "custom_components.sjwater.coordinator.dt_util.now",
+            return_value=now,
+        ):
+            with pytest.raises(RuntimeError, match="Import failed"):
+                await coordinator._async_update_data()
+
+        assert coordinator._current_sum == 7.0
+        assert coordinator._last_processed_start is None
+        mock_store.async_save.assert_not_called()
 
 
 class TestWatermarkRepair:
@@ -378,7 +425,7 @@ class TestImportStats:
         assert call_args[1]["metadata"]["has_sum"] is True
         assert call_args[1]["statistics"] == stats
 
-    async def test_import_stats_exception_swallowed(self, coordinator):
+    async def test_import_stats_exception_is_propagated(self, coordinator):
         import sys, types
 
         recorder_models = types.ModuleType("homeassistant.components.recorder.models")
@@ -399,7 +446,8 @@ class TestImportStats:
 
         coordinator.client.username = "test@example.com"
         with patch.object(type(coordinator), "entity_id", new_callable=PropertyMock, return_value="sensor.sjwater_test_water_usage"):
-            coordinator._import_stats(stats)
+            with pytest.raises(Exception, match="Import failed"):
+                coordinator._import_stats(stats)
 
         recorder_stats.async_import_statistics.assert_called_once()
 
@@ -407,12 +455,11 @@ class TestImportStats:
 class TestEntityId:
     async def test_generates_correct_entity_id(self, coordinator):
         coordinator.client.username = "test@example.com"
+        coordinator.entry.entry_id = "01M5VCP6D3BRV8CV844DW0QX4E"
 
         result = coordinator.entity_id
 
-        assert result.startswith("sensor.sjwater_")
-        assert result.endswith("_water_usage")
-        assert len(result) > len("sensor.sjwater__water_usage")
+        assert result == "sensor.sjwater_01m5vcp6d3brv8cv844dw0qx4e_water_usage"
 
     async def test_consistent_across_calls(self, coordinator):
         coordinator.client.username = "test@example.com"

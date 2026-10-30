@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import aiohttp
@@ -48,9 +49,8 @@ class TestAsyncLogin:
     async def test_missing_token_in_html(self, api_client, mock_session, mock_get_factory):
         mock_get_factory(text=load_fixture("login_page_no_token.html"))
 
-        result = await api_client.async_login()
-
-        assert result is False
+        with pytest.raises(CannotConnect, match="expected security token"):
+            await api_client.async_login()
         assert api_client._token is None
 
     async def test_unsuccessful_api_response(self, api_client, mock_session, mock_get_factory, mock_post_factory):
@@ -60,7 +60,8 @@ class TestAsyncLogin:
         result = await api_client.async_login()
 
         assert result is False
-        assert api_client._token == "abc123def456token789"
+        assert api_client._token is None
+        assert api_client._account_guid is None
 
     async def test_account_guid_discovery(self, api_client, mock_session, mock_get_factory, mock_post_factory):
         mock_get_factory(text=load_fixture("login_page.html"))
@@ -74,9 +75,41 @@ class TestAsyncLogin:
         mock_get_factory(text=load_fixture("login_page.html"))
         mock_post_factory(data=load_json_fixture("login_success_no_acct.json"))
 
-        await api_client.async_login()
+        with pytest.raises(CannotConnect, match="numeric account identifier"):
+            await api_client.async_login()
+        assert api_client._token is None
 
-        assert api_client._account_guid is None
+    async def test_discovers_numeric_value_under_opaque_attribute_keys(
+        self, api_client, mock_get_factory, mock_post_factory
+    ):
+        response = load_json_fixture("login_success.json")
+        response["VXengage_Login"]["Transaction"]["Attributes"] = {
+            "1825149148": "987654321",
+            "1970351119": "Account Name",
+        }
+        mock_get_factory(text=load_fixture("login_page.html"))
+        mock_post_factory(data=response)
+
+        assert await api_client.async_login() is True
+        assert api_client._account_guid == "987654321"
+
+    async def test_does_not_log_opaque_attribute_keys(
+        self, api_client, mock_get_factory, mock_post_factory, caplog
+    ):
+        response = load_json_fixture("login_success.json")
+        response["VXengage_Login"]["Transaction"]["Attributes"] = {
+            "1825149148": "987654321",
+            "1970351119": "Account Name",
+        }
+        mock_get_factory(text=load_fixture("login_page.html"))
+        mock_post_factory(data=response)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.sjwater.api"):
+            await api_client.async_login()
+
+        assert "1825149148" not in caplog.text
+        assert "1970351119" not in caplog.text
+        assert "987654321" not in caplog.text
 
     async def test_login_page_get_uses_browser_headers(self, api_client, mock_session, mock_get_factory, mock_post_factory):
         mock_get_factory(text=load_fixture("login_page.html"))
@@ -86,6 +119,23 @@ class TestAsyncLogin:
 
         get_headers = mock_session.get.call_args[1].get("headers", {})
         assert get_headers.get("User-Agent", "").startswith("Mozilla/5.0")
+        assert mock_session.get.call_args[1]["timeout"].total == 30
+        assert mock_session.get.call_args[1]["allow_redirects"] is False
+
+    async def test_login_exception_clears_previous_session(
+        self, api_client, mock_session
+    ):
+        api_client._token = "stale-token"
+        api_client._account_guid = "1234567890"
+        response = _make_async_resp()
+        response.raise_for_status.side_effect = aiohttp.ClientError("Connection failed")
+        mock_session.get.return_value = response
+
+        with pytest.raises(aiohttp.ClientError):
+            await api_client.async_login()
+
+        assert api_client._token is None
+        assert api_client._account_guid is None
 
     async def test_token_registered_before_login(self, api_client, mock_session, mock_get_factory, mock_post_factory):
         mock_get_factory(text=load_fixture("login_page.html"))
@@ -96,6 +146,20 @@ class TestAsyncLogin:
         urls = [str(c[0][0]) for c in mock_session.post.call_args_list]
         assert "CreateExceptionPermissions" in urls[0]
         assert "RequestBroker" in urls[1]
+
+    async def test_login_debug_log_excludes_account_attributes(
+        self, api_client, mock_get_factory, mock_post_factory, caplog
+    ):
+        mock_get_factory(text=load_fixture("login_page.html"))
+        mock_post_factory(data=load_json_fixture("login_success.json"))
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.sjwater.api"):
+            await api_client.async_login()
+
+        assert "1234567890" not in caplog.text
+        assert "Test Account" not in caplog.text
+        assert "test@example.com" not in caplog.text
+        assert "success=True" in caplog.text
 
 
 class TestAsyncVerifyCredentials:
@@ -122,12 +186,12 @@ class TestAsyncVerifyCredentials:
         with pytest.raises(CannotConnect, match="Cannot reach SJ Water Hub"):
             await api_client.async_verify_credentials()
 
-    async def test_raises_cannot_connect_on_unexpected_error(self, api_client, mock_session):
+    async def test_unexpected_error_is_not_masked(self, api_client, mock_session):
         resp = _make_async_resp()
         resp.raise_for_status.side_effect = Exception("Unexpected")
         mock_session.get.return_value = resp
 
-        with pytest.raises(CannotConnect, match="Unexpected error"):
+        with pytest.raises(Exception, match="Unexpected"):
             await api_client.async_verify_credentials()
 
 
@@ -140,6 +204,8 @@ class TestAsyncGetData:
         assert "gallons" in result
         assert "timestamp" in result
         assert "last_updated" in result
+        assert isinstance(result["data_updated_at"], datetime)
+        assert result["data_updated_at"].utcoffset() == timezone.utc.utcoffset(None)
         assert "history" in result
         assert len(result["history"]) > 0
         for entry in result["history"]:
@@ -153,6 +219,24 @@ class TestAsyncGetData:
 
         assert result["gallons"] == 0.0
         assert result["history"] == []
+
+    async def test_parses_portal_last_updated_timestamp(
+        self, authenticated_client, mock_post_factory
+    ):
+        mock_post_factory(data={
+            "VXengage_GetHourlyGraph": {
+                "Success": True,
+                "ComplexSlidingGraphDataSets": [],
+                "ComplexLabels": [],
+                "LastUpdated": "2026-10-29T12:00:00-06:00",
+            }
+        })
+
+        result = await authenticated_client.async_get_data()
+
+        assert result["data_updated_at"] == datetime(
+            2026, 10, 29, 18, tzinfo=timezone.utc
+        )
 
     async def test_session_expiry_reauthentication(self, authenticated_client, mock_session, mock_get_factory):
         hourly_expired = load_json_fixture("hourly_graph_expired.json")
@@ -184,7 +268,7 @@ class TestAsyncGetData:
     async def test_no_account_guid_raises_error(self, api_client, mock_session):
         api_client._token = "some_token"
 
-        with pytest.raises(CannotConnect, match="Account number could not be discovered"):
+        with pytest.raises(CannotConnect, match="Account identifier could not be discovered"):
             await api_client.async_get_data()
 
     async def test_token_rotated_on_data_response(self, authenticated_client, mock_session, mock_post_factory):
@@ -221,6 +305,8 @@ class TestPostRequest:
         assert headers.get("X-Requested-With") == "XMLHttpRequest"
         assert "application/json" in headers.get("Content-Type", "")
         assert headers.get("User-Agent", "").startswith("Mozilla/5.0")
+        assert call_args[1]["allow_redirects"] is False
+        assert call_args[1]["timeout"].total == 30
         assert headers.get("Origin") == "https://www.sjwaterhub.com"
 
     async def test_include_payload_additions(self, api_client, mock_session, mock_post_factory):
@@ -249,6 +335,12 @@ class TestPostRequest:
         with pytest.raises(aiohttp.ClientError):
             await api_client._post_request("Action", "View")
 
+    async def test_rejects_redirects(self, api_client, mock_session):
+        mock_session.post.return_value = _make_async_resp(status=307)
+
+        with pytest.raises(CannotConnect, match="redirected"):
+            await api_client._post_request("VXengage_Login", "Login")
+
 
 class TestAsyncGetDataEdgeCases:
     async def test_reauth_failure_raises(self, authenticated_client, mock_session, mock_get_factory):
@@ -268,36 +360,26 @@ class TestAsyncGetDataEdgeCases:
 
         mock_session.post.side_effect = post_side_effect
 
-        with pytest.raises(Exception, match="Re-authentication failed"):
+        with pytest.raises(InvalidAuth, match="Invalid username or password"):
             await authenticated_client.async_get_data()
 
     async def test_unsuccessful_graph_response_raises(self, authenticated_client, mock_session, mock_post_factory):
         mock_post_factory(data=load_json_fixture("hourly_graph_unsuccessful.json"))
 
-        with pytest.raises(Exception, match="API returned unsuccessful response"):
+        with pytest.raises(CannotConnect, match="unsuccessful hourly graph data"):
             await authenticated_client.async_get_data()
 
     async def test_auto_login_when_no_token(self, api_client, mock_session, mock_get_factory, mock_post_factory):
         mock_get_factory(text=load_fixture("login_page.html"))
-        mock_post_factory(data=load_json_fixture("login_success.json"))
-        mock_post_factory(data=load_json_fixture("hourly_graph_success.json"))
-
-        api_client._account_guid = "1234567890"
+        mock_session.post.side_effect = [
+            _make_async_resp(data={}),
+            _make_async_resp(data=load_json_fixture("login_success.json")),
+            _make_async_resp(data=load_json_fixture("hourly_graph_success.json")),
+        ]
 
         result = await api_client.async_get_data()
 
         assert len(result["history"]) > 0
-
-    async def test_custom_account_number(self, authenticated_client, mock_session, mock_post_factory):
-        mock_post_factory(data=load_json_fixture("hourly_graph_success.json"))
-
-        result = await authenticated_client.async_get_data(account_number="42")
-
-        assert len(result["history"]) > 0
-
-        call_args = mock_session.post.call_args
-        inner = json.loads(json.loads(call_args[1].get("data"))["Request"])
-        assert inner["AccountNumber"] == "42"
 
     async def test_dict_type_labels(self, authenticated_client, mock_session, mock_post_factory):
         mock_post_factory(data=load_json_fixture("hourly_graph_dict_labels.json"))
@@ -317,13 +399,62 @@ class TestAsyncGetDataEdgeCases:
         for entry in result["history"]:
             assert isinstance(entry["start"], datetime)
 
-    async def test_unparseable_date_fallback(self, authenticated_client, mock_session, mock_post_factory):
+    async def test_unparseable_dates_are_skipped(self, authenticated_client, mock_session, mock_post_factory):
         mock_post_factory(data=load_json_fixture("hourly_graph_bad_dates.json"))
 
         result = await authenticated_client.async_get_data()
 
-        for entry in result["history"]:
-            assert isinstance(entry["start"], datetime)
+        assert result["history"] == []
+        assert result["timestamp"] is None
+        assert result["gallons"] == 0.0
+
+    async def test_duplicate_readings_keep_their_own_timestamps(
+        self, authenticated_client, mock_session, mock_post_factory
+    ):
+        mock_post_factory(data={
+            "VXengage_GetHourlyGraph": {
+                "Success": True,
+                "ComplexSlidingGraphDataSets": [
+                    {"data": ["1.0", "2.0", "2.0"]}
+                ],
+                "ComplexLabels": [
+                    "2024-06-06 01:00:00",
+                    "2024-06-06 02:00:00",
+                    "2024-06-06 03:00:00",
+                ],
+            }
+        })
+
+        result = await authenticated_client.async_get_data()
+
+        assert result["gallons"] == 2.0
+        assert result["timestamp"] == result["history"][-1]["start"]
+        assert result["timestamp"] != result["history"][-2]["start"]
+
+    async def test_future_readings_do_not_become_latest_reading(
+        self, authenticated_client, mock_session, mock_post_factory
+    ):
+        mock_post_factory(data={
+            "VXengage_GetHourlyGraph": {
+                "Success": True,
+                "ComplexSlidingGraphDataSets": [
+                    {"data": ["1.0", "2.0", "0.0"]}
+                ],
+                "ComplexLabels": [
+                    "2024-06-06T11:00:00+00:00",
+                    "2024-06-06T13:00:00+00:00",
+                    "2024-06-06T22:00:00+00:00",
+                ],
+            }
+        })
+        now = datetime(2024, 6, 6, 13, 30, tzinfo=timezone.utc)
+
+        with patch("custom_components.sjwater.api.dt_util.utcnow", return_value=now):
+            result = await authenticated_client.async_get_data()
+
+        assert len(result["history"]) == 3
+        assert result["gallons"] == 2.0
+        assert result["timestamp"] == result["history"][1]["start"]
 
     async def test_negative_gallons_clamped(self, authenticated_client, mock_session, mock_post_factory):
         mock_post_factory(data=load_json_fixture("hourly_graph_negative.json"))
