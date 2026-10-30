@@ -116,6 +116,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
             last_successful_update = dt_util.utcnow()
             history = api_data.get("history", [])
             latest_timestamp = api_data.get("timestamp")
+            data_updated_at = api_data.get("data_updated_at")
 
             if not history:
                 _LOGGER.debug("No history returned from API")
@@ -123,6 +124,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                     self._current_sum or 0.0,
                     0.0,
                     latest_timestamp,
+                    data_updated_at,
                     last_successful_update,
                 )
 
@@ -235,6 +237,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 provisional_sum,
                 today_sum,
                 latest_timestamp,
+                data_updated_at,
                 last_successful_update,
             )
 
@@ -249,6 +252,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         current_sum: float,
         today_sum: float,
         latest_timestamp: datetime | None,
+        data_updated_at: datetime | None,
         last_successful_update: datetime,
     ) -> dict:
         """Build the data dict returned to sensor entities."""
@@ -256,6 +260,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
             "current_sum": current_sum,
             "today_sum": today_sum,
             "timestamp": latest_timestamp,
+            "data_updated_at": data_updated_at,
             "last_successful_update": last_successful_update,
         }
 

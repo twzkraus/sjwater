@@ -326,9 +326,22 @@ class SJWaterHubApiClient:
             default=None,
         )
 
+        last_updated = graph_data.get("LastUpdated", "")
+        data_updated_at = None
+        if last_updated:
+            try:
+                updated_dt = dt_parse(last_updated)
+            except (ParserError, TypeError, ValueError, OverflowError):
+                _LOGGER.warning("The water portal returned an invalid LastUpdated timestamp")
+            else:
+                if updated_dt.tzinfo is None:
+                    updated_dt = updated_dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+                data_updated_at = dt_util.as_utc(updated_dt)
+
         return {
             "gallons": latest_reading["state"] if latest_reading else 0.0,
             "timestamp": latest_reading["start"] if latest_reading else None,
-            "last_updated": graph_data.get("LastUpdated", ""),
+            "last_updated": last_updated,
+            "data_updated_at": data_updated_at,
             "history": parsed_history,
         }

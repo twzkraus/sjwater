@@ -204,6 +204,8 @@ class TestAsyncGetData:
         assert "gallons" in result
         assert "timestamp" in result
         assert "last_updated" in result
+        assert isinstance(result["data_updated_at"], datetime)
+        assert result["data_updated_at"].utcoffset() == timezone.utc.utcoffset(None)
         assert "history" in result
         assert len(result["history"]) > 0
         for entry in result["history"]:
@@ -217,6 +219,24 @@ class TestAsyncGetData:
 
         assert result["gallons"] == 0.0
         assert result["history"] == []
+
+    async def test_parses_portal_last_updated_timestamp(
+        self, authenticated_client, mock_post_factory
+    ):
+        mock_post_factory(data={
+            "VXengage_GetHourlyGraph": {
+                "Success": True,
+                "ComplexSlidingGraphDataSets": [],
+                "ComplexLabels": [],
+                "LastUpdated": "2026-10-29T12:00:00-06:00",
+            }
+        })
+
+        result = await authenticated_client.async_get_data()
+
+        assert result["data_updated_at"] == datetime(
+            2026, 10, 29, 18, tzinfo=timezone.utc
+        )
 
     async def test_session_expiry_reauthentication(self, authenticated_client, mock_session, mock_get_factory):
         hourly_expired = load_json_fixture("hourly_graph_expired.json")

@@ -75,6 +75,9 @@ class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
         if self.coordinator.data is not None:
             return {
                 "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "data_updated_at": _local_timestamp(
+                    self.coordinator.data.get("data_updated_at")
+                ),
                 "last_successful_update": _local_timestamp(
                     self.coordinator.data.get("last_successful_update")
                 ),
@@ -126,6 +129,9 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
         if self.coordinator.data is not None:
             return {
                 "recorded_at": _local_timestamp(self.coordinator.data.get("timestamp")),
+                "data_updated_at": _local_timestamp(
+                    self.coordinator.data.get("data_updated_at")
+                ),
                 "last_successful_update": _local_timestamp(
                     self.coordinator.data.get("last_successful_update")
                 ),

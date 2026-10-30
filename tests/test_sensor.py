@@ -87,14 +87,17 @@ class TestSJWaterHubSensor:
 
     async def test_extra_state_attributes_with_data(self, total_sensor, mock_coordinator):
         timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        data_updated_at = datetime(2024, 6, 6, 11, tzinfo=timezone.utc)
         update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
         mock_coordinator.data = {
             "current_sum": 100.0,
             "timestamp": timestamp,
+            "data_updated_at": data_updated_at,
             "last_successful_update": update_timestamp,
         }
         attrs = total_sensor.extra_state_attributes
         assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["data_updated_at"] == dt_util.as_local(data_updated_at)
         assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_extra_state_attributes_empty_when_no_data(self, total_sensor, mock_coordinator):
@@ -113,14 +116,17 @@ class TestSJWaterHubDailySensor:
 
     async def test_extra_state_attributes_with_data(self, daily_sensor, mock_coordinator):
         timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        data_updated_at = datetime(2024, 6, 6, 11, tzinfo=timezone.utc)
         update_timestamp = datetime(2024, 6, 6, 13, tzinfo=timezone.utc)
         mock_coordinator.data = {
             "today_sum": 5.5,
             "timestamp": timestamp,
+            "data_updated_at": data_updated_at,
             "last_successful_update": update_timestamp,
         }
         attrs = daily_sensor.extra_state_attributes
         assert attrs["recorded_at"] == dt_util.as_local(timestamp)
+        assert attrs["data_updated_at"] == dt_util.as_local(data_updated_at)
         assert attrs["last_successful_update"] == dt_util.as_local(update_timestamp)
 
     async def test_prevents_negative_values(self, daily_sensor, mock_coordinator):

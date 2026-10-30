@@ -48,6 +48,7 @@ class TestAsyncUpdateData:
         coordinator._last_processed_start = None
 
         now = dt_util.utcnow()
+        data_updated_at = now - timedelta(hours=1)
         # Older than FINALIZATION_LAG so the entries are finalized/persisted
         history = [
             {"start": now - timedelta(hours=50), "state": "1.5"},
@@ -58,6 +59,7 @@ class TestAsyncUpdateData:
             "gallons": 2.5,
             "timestamp": now,
             "last_updated": "2024-06-06T12:00:00",
+            "data_updated_at": data_updated_at,
             "history": history,
         })):
             with patch.object(coordinator, "_import_stats") as mock_import:
@@ -67,6 +69,7 @@ class TestAsyncUpdateData:
         assert result["current_sum"] == 4.0
         assert "today_sum" in result
         assert "timestamp" in result
+        assert result["data_updated_at"] == data_updated_at
         assert isinstance(result["last_successful_update"], datetime)
         assert result["last_successful_update"].utcoffset() == timedelta(0)
         mock_store.async_save.assert_called_once()

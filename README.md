@@ -60,7 +60,7 @@ The `<id>` is based on the Home Assistant config-entry ID.
 
 ### Attributes
 
-- Both sensors include `recorded_at`, the timestamp of the most recent water reading returned by the API, and `last_successful_update`, when the integration last fetched data successfully. Both timestamps are stored in UTC and exposed in Home Assistant's configured time zone.
+- Both sensors include `recorded_at`, the latest hourly bucket timestamp, `data_updated_at`, the portal's `LastUpdated` timestamp, and `last_successful_update`, when the integration last fetched data successfully. These timestamps are stored in UTC and exposed in Home Assistant's configured time zone. `data_updated_at` indicates how current the portal's usage data is; a recent fetch does not necessarily mean the portal has posted newer readings.
 
 ## Energy Dashboard Setup
 
