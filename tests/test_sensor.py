@@ -11,6 +11,9 @@ from homeassistant.util import dt as dt_util
 from custom_components.sjwater.sensor import (
     SJWaterHubSensor,
     SJWaterHubDailySensor,
+    OriginalSJWaterHubSensor,
+    OriginalSJWaterHubDailySensor,
+    _account_id,
     async_setup_entry,
 )
 from custom_components.sjwater.const import DOMAIN, entry_id_slug
@@ -43,6 +46,11 @@ class TestEntryIdSlug:
         assert entry_id_slug("01M5VCP6D3BRV8CV844DW0QX4E") == (
             "01m5vcp6d3brv8cv844dw0qx4e"
         )
+
+
+class TestAccountId:
+    def test_derives_original_hash_from_username(self):
+        assert _account_id("test@example.com") == "973dfe46"
 
 
 class TestSJWaterHubSensor:
@@ -187,8 +195,36 @@ class TestSJWaterHubSensorEdgeCases:
         assert sensor.native_value == 0.0
 
 
+class TestOriginalSensors:
+    async def test_preserves_original_entity_ids_and_device_identity(
+        self, mock_coordinator
+    ):
+        total_sensor = OriginalSJWaterHubSensor(mock_coordinator)
+        daily_sensor = OriginalSJWaterHubDailySensor(mock_coordinator)
+
+        assert total_sensor.entity_id == "sensor.sjwater_973dfe46_water_usage"
+        assert total_sensor.unique_id == "sjwater_973dfe46_water_usage"
+        assert daily_sensor.entity_id == (
+            "sensor.sjwater_973dfe46_todays_water_usage"
+        )
+        assert daily_sensor.unique_id == (
+            "sjwater_973dfe46_todays_water_usage"
+        )
+        assert total_sensor.device_info == daily_sensor.device_info
+        assert total_sensor.device_info["identifiers"] == {(DOMAIN, "973dfe46")}
+
+    async def test_preserves_original_timestamp_attributes(self, mock_coordinator):
+        timestamp = datetime(2024, 6, 6, 12, tzinfo=timezone.utc)
+        mock_coordinator.data = {"timestamp": timestamp}
+        total_sensor = OriginalSJWaterHubSensor(mock_coordinator)
+        daily_sensor = OriginalSJWaterHubDailySensor(mock_coordinator)
+
+        assert total_sensor.extra_state_attributes == {"recorded_at": timestamp}
+        assert daily_sensor.extra_state_attributes is None
+
+
 class TestAsyncSetupEntry:
-    async def test_creates_both_sensors(self):
+    async def test_creates_current_and_original_sensors(self):
         mock_hass = MagicMock()
         mock_entry = MagicMock()
         mock_entry.entry_id = "test-entry-1"
@@ -202,6 +238,8 @@ class TestAsyncSetupEntry:
 
         mock_add_entities.assert_called_once()
         entities = mock_add_entities.call_args[0][0]
-        assert len(entities) == 2
+        assert len(entities) == 4
         assert isinstance(entities[0], SJWaterHubSensor)
         assert isinstance(entities[1], SJWaterHubDailySensor)
+        assert isinstance(entities[2], OriginalSJWaterHubSensor)
+        assert isinstance(entities[3], OriginalSJWaterHubDailySensor)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -106,6 +107,12 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
     def entity_id(self) -> str:
         """Return the sensor entity ID for this config entry."""
         acct = entry_id_slug(self.entry.entry_id)
+        return f"sensor.sjwater_{acct}_water_usage"
+
+    @property
+    def original_entity_id(self) -> str:
+        """Return the original username-hash sensor entity ID."""
+        acct = hashlib.sha256(self.client.username.encode()).hexdigest()[:8]
         return f"sensor.sjwater_{acct}_water_usage"
 
     async def _async_update_data(self) -> dict:
@@ -274,17 +281,19 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
         """
         from homeassistant.components.recorder.models import StatisticMeanType
         from homeassistant.components.recorder.statistics import async_import_statistics
-        async_import_statistics(
-            self.hass,
-            metadata={
-                "statistic_id": self.entity_id,
-                "source": "recorder",
-                "mean_type": StatisticMeanType.NONE,
-                "has_sum": True,
-                "name": "Water Meter Total",
-                "unit_class": VolumeConverter.UNIT_CLASS,
-                "unit_of_measurement": UnitOfVolume.GALLONS,
-            },
-            statistics=stats,
-        )
+        statistic_ids = dict.fromkeys((self.entity_id, self.original_entity_id))
+        for statistic_id in statistic_ids:
+            async_import_statistics(
+                self.hass,
+                metadata={
+                    "statistic_id": statistic_id,
+                    "source": "recorder",
+                    "mean_type": StatisticMeanType.NONE,
+                    "has_sum": True,
+                    "name": "Water Meter Total",
+                    "unit_class": VolumeConverter.UNIT_CLASS,
+                    "unit_of_measurement": UnitOfVolume.GALLONS,
+                },
+                statistics=stats,
+            )
         _LOGGER.debug("Imported %d water usage statistics rows", len(stats))

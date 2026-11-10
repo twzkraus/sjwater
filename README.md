@@ -7,9 +7,10 @@ Custom Home Assistant integration for **SJ Water Company** (sjwaterhub.com). Fet
 ## Features
 
 - **Hourly water usage** — Scrapes the SJ Water Hub portal API for per-hour consumption data (in gallons)
-- **Two sensors per account:**
+- **Current sensors per account:**
   - **Water Meter Total** (`sensor.sjwater_<id>_water_usage`) — Monotonically increasing total, suitable for the HA Energy Dashboard
   - **Today's Water Usage** (`sensor.sjwater_<id>_todays_water_usage`) — Daily reset counter showing current day's consumption
+- **Original-identity sensors** — The previous username-hash entity IDs are also restored for comparison with existing Home Assistant entities.
 - **Energy Dashboard compatible** — Imports historical statistics so the water meter appears alongside gas/electric usage
 - **Persistent state** — Running sum survives HA restarts via `homeassistant.helpers.storage.Store`
 - **Session management** — Auto-authenticates, handles token rotation, and re-authenticates on session expiry
@@ -47,7 +48,7 @@ Then restart Home Assistant
 
 ### Multiple Accounts
 
-Each account configuration uses a normalized username hash for duplicate detection and an opaque Home Assistant config-entry ID in entity IDs. The internal hash is pseudonymous.
+Each account configuration uses a normalized username hash for duplicate detection and an opaque Home Assistant config-entry ID in the current entity IDs. The internal hash is pseudonymous.
 
 ## Sensors
 
@@ -55,8 +56,10 @@ Each account configuration uses a normalized username hash for duplicate detecti
 |--------|-------------------|-------------|-------------|
 | Water Meter Total | `sensor.sjwater_<id>_water_usage` | `TOTAL_INCREASING` | Cumulative water consumption (gallons). Never decreases — any drop is treated as a counter reset. |
 | Today's Water Usage | `sensor.sjwater_<id>_todays_water_usage` | `TOTAL` | Water used today (gallons). Resets at midnight with `last_reset` set to start of day. |
+| Original Water Meter Total | `sensor.sjwater_<hash>_water_usage` | `TOTAL_INCREASING` | Original username-hash entity identity, retained alongside the current sensor. |
+| Original Today's Water Usage | `sensor.sjwater_<hash>_todays_water_usage` | `TOTAL` | Original username-hash entity identity, retained alongside the current sensor. |
 
-The `<id>` is based on the Home Assistant config-entry ID.
+The current `<id>` is based on the Home Assistant config-entry ID. The original `<hash>` is the first 8 characters of SHA-256 of the username as entered. Both pairs use the same coordinator and readings; they are duplicate entity identities, not independent runs of the original integration code. The original total sensor exposes the API timestamp as-is, and the original daily sensor has no extra state attributes.
 
 ### Attributes
 

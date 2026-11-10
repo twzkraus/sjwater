@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 
 from homeassistant.components.sensor import (
     SensorEntity,
@@ -12,6 +13,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, entry_id_slug
+
+
+def _account_id(username: str) -> str:
+    """Return the original stable account identifier."""
+    return hashlib.sha256(username.encode()).hexdigest()[:8]
 
 
 def _local_timestamp(timestamp: datetime | None) -> datetime | None:
@@ -26,7 +32,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
     async_add_entities([
         SJWaterHubSensor(coordinator),
-        SJWaterHubDailySensor(coordinator)
+        SJWaterHubDailySensor(coordinator),
+        OriginalSJWaterHubSensor(coordinator),
+        OriginalSJWaterHubDailySensor(coordinator),
     ])
 
 class SJWaterHubSensor(CoordinatorEntity, SensorEntity):
@@ -146,3 +154,55 @@ class SJWaterHubDailySensor(CoordinatorEntity, SensorEntity):
         if self._last_reset_midnight is None or self._last_reset_midnight.date() != today_midnight.date():
             self._last_reset_midnight = today_midnight
         return self._last_reset_midnight
+
+
+class OriginalSJWaterHubSensor(SJWaterHubSensor):
+    """The original username-hash sensor identity and attributes."""
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        acct = _account_id(coordinator.client.username)
+        self.entity_id = f"sensor.sjwater_{acct}_water_usage"
+        self._attr_unique_id = f"sjwater_{acct}_water_usage"
+
+    @property
+    def device_info(self):
+        """Return the original account-hash device identity."""
+        return {
+            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "name": "SJ Water Hub",
+            "manufacturer": "SJ Water Company",
+            "model": "Scraped Hub",
+        }
+
+    @property
+    def extra_state_attributes(self):
+        """Expose the original unconverted reading timestamp."""
+        if self.coordinator.data is not None:
+            return {"recorded_at": self.coordinator.data.get("timestamp")}
+        return {}
+
+
+class OriginalSJWaterHubDailySensor(SJWaterHubDailySensor):
+    """The original daily sensor identity and attribute behavior."""
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        acct = _account_id(coordinator.client.username)
+        self.entity_id = f"sensor.sjwater_{acct}_todays_water_usage"
+        self._attr_unique_id = f"sjwater_{acct}_todays_water_usage"
+
+    @property
+    def device_info(self):
+        """Return the original account-hash device identity."""
+        return {
+            "identifiers": {(DOMAIN, _account_id(self.coordinator.client.username))},
+            "name": "SJ Water Hub",
+            "manufacturer": "SJ Water Company",
+            "model": "Scraped Hub",
+        }
+
+    @property
+    def extra_state_attributes(self):
+        """The original daily sensor did not expose extra attributes."""
+        return None

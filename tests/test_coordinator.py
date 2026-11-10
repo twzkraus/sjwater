@@ -418,12 +418,14 @@ class TestImportStats:
             coordinator._import_stats(stats)
 
         mock_import = recorder_stats.async_import_statistics
-        mock_import.assert_called_once()
-        call_args = mock_import.call_args
-        assert call_args[0][0] == coordinator.hass
-        assert call_args[1]["metadata"]["statistic_id"] == expected_entity_id
-        assert call_args[1]["metadata"]["has_sum"] is True
-        assert call_args[1]["statistics"] == stats
+        assert [
+            call.kwargs["metadata"]["statistic_id"]
+            for call in mock_import.call_args_list
+        ] == [expected_entity_id, "sensor.sjwater_973dfe46_water_usage"]
+        for call_args in mock_import.call_args_list:
+            assert call_args.args[0] == coordinator.hass
+            assert call_args.kwargs["metadata"]["has_sum"] is True
+            assert call_args.kwargs["statistics"] == stats
 
     async def test_import_stats_exception_is_propagated(self, coordinator):
         import sys, types
@@ -460,6 +462,11 @@ class TestEntityId:
         result = coordinator.entity_id
 
         assert result == "sensor.sjwater_01m5vcp6d3brv8cv844dw0qx4e_water_usage"
+
+    async def test_generates_original_username_hash_entity_id(self, coordinator):
+        coordinator.client.username = "test@example.com"
+
+        assert coordinator.original_entity_id == "sensor.sjwater_973dfe46_water_usage"
 
     async def test_consistent_across_calls(self, coordinator):
         coordinator.client.username = "test@example.com"
