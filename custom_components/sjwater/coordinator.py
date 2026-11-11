@@ -195,7 +195,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 # stays in sync with the live sensor's running total.
                 total_stats.append({
                     "start": utc_start,
-                    "state": new_sum,
+                    "state": entry_state,
                     "sum": new_sum,
                 })
 
@@ -213,7 +213,7 @@ class SJWaterHubCoordinator(DataUpdateCoordinator):
                 )
                 total_stats.append({
                     "start": utc_start,
-                    "state": provisional_sum,
+                    "state": entry_state,
                     "sum": provisional_sum,
                 })
             if provisional:

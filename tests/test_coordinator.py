@@ -74,7 +74,9 @@ class TestAsyncUpdateData:
         assert result["last_successful_update"].utcoffset() == timedelta(0)
         mock_store.async_save.assert_called_once()
         mock_import.assert_called_once()
-        assert [row["state"] for row in mock_import.call_args[0][0]] == [1.5, 4.0]
+        rows = mock_import.call_args[0][0]
+        assert [row["state"] for row in rows] == [1.5, 2.5]
+        assert [row["sum"] for row in rows] == [1.5, 4.0]
 
     async def test_skips_already_processed_entries(self, coordinator, mock_store):
         coordinator._current_sum = 10.0
@@ -278,7 +280,7 @@ class TestFinalizationWindow:
         mock_import.assert_called_once()
         rows = mock_import.call_args[0][0]
         assert [r["sum"] for r in rows] == [11.0, 13.0]
-        assert [r["state"] for r in rows] == [11.0, 13.0]
+        assert [r["state"] for r in rows] == [1.0, 2.0]
         # ...but never advance the persisted watermark/sum, so late-arriving
         # revisions for these hours are re-processed on the next poll.
         mock_store.async_save.assert_not_called()
